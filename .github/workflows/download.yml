@@ -70,11 +70,11 @@ jobs:
           from shuba_downloader import download_novel, CONFIG
           
           # 从环境变量获取参数
-          book_id = os.environ.get('BOOK_ID')
-          file_format = os.environ.get('FORMAT', 'txt')
-          start_chapter = os.environ.get('START_CHAPTER')
-          end_chapter = os.environ.get('END_CHAPTER')
-          thread_count = int(os.environ.get('THREAD_COUNT', '1'))
+          # book_id = os.environ.get('BOOK_ID')
+          # file_format = os.environ.get('FORMAT', 'txt')
+          # start_chapter = os.environ.get('START_CHAPTER')
+          # end_chapter = os.environ.get('END_CHAPTER')
+          # thread_count = int(os.environ.get('THREAD_COUNT', '1'))
           
           # 设置线程数
           CONFIG['max_workers'] = thread_count
@@ -103,7 +103,7 @@ jobs:
           export END_CHAPTER="${{ github.event.inputs.end_chapter }}"
           export THREAD_COUNT="${{ github.event.inputs.thread_count }}"
           
-          python run_download.py
+          python run_download.py "${{ github.event.inputs.book_id }}" "${{ save_path }}" "${{ github.event.inputs.format }}" "${{ github.event.inputs.start_chapter }}" "${{ github.event.inputs.end_chapter }}" "${{ github.event.inputs.thread_count }}"
       
       - name: 上传下载结果
         uses: actions/upload-artifact@v4
