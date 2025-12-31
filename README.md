@@ -1,4 +1,4 @@
-# 69shuba-novel-Downloader
+# shuba-novel-Downloader
 
 # 使用指南
 
