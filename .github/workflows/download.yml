@@ -32,6 +32,7 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6小时超时
     
     steps:
       - name: 检出代码
@@ -51,23 +52,39 @@ jobs:
       - name: 安装 Chrome 和 ChromeDriver
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip
+          sudo apt-get install -y wget unzip xvfb
           # 安装 Chrome
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get -f install -y
           # 验证安装
           google-chrome --version
+          which google-chrome
       
       - name: 准备下载脚本
         run: |
-          # 创建非交互式下载脚本
           cat > run_download.py << 'EOF'
           import sys
           import os
           
+          # 确保输出立即显示
+          sys.stdout.reconfigure(line_buffering=True)
+          sys.stderr.reconfigure(line_buffering=True)
+          
+          print("=" * 60, flush=True)
+          print("脚本开始执行", flush=True)
+          print("=" * 60, flush=True)
+          
           # 导入下载器
           sys.path.insert(0, os.path.dirname(__file__))
-          from shuba_downloader import download_novel, CONFIG
+          
+          try:
+              from shuba_downloader import download_novel, CONFIG
+              print("✓ 成功导入下载器模块", flush=True)
+          except Exception as e:
+              print(f"✗ 导入模块失败: {e}", flush=True)
+              import traceback
+              traceback.print_exc()
+              sys.exit(1)
           
           # 获取参数
           book_id = "${{ github.event.inputs.book_id }}"
@@ -76,6 +93,11 @@ jobs:
           end_chapter = "${{ github.event.inputs.end_chapter }}"
           thread_count = int("${{ github.event.inputs.thread_count }}")
           
+          print(f"✓ 参数解析完成", flush=True)
+          print(f"  书籍ID: {book_id}", flush=True)
+          print(f"  输出格式: {file_format}", flush=True)
+          print(f"  线程数: {thread_count}", flush=True)
+          
           # 设置线程数
           CONFIG['max_workers'] = thread_count
           
@@ -83,37 +105,89 @@ jobs:
           start = int(start_chapter) - 1 if start_chapter else None
           end = int(end_chapter) - 1 if end_chapter else None
           
+          if start is not None and end is not None:
+              print(f"  章节范围: {start+1} - {end+1}", flush=True)
+          
           # 执行下载
           save_path = './output'
           os.makedirs(save_path, exist_ok=True)
+          print(f"✓ 创建输出目录: {save_path}", flush=True)
           
-          print(f"开始下载书籍 ID: {book_id}")
-          print(f"格式: {file_format}")
-          print(f"线程数: {thread_count}")
-          if start is not None and end is not None:
-              print(f"章节范围: {start+1} - {end+1}")
+          print("=" * 60, flush=True)
+          print("开始下载...", flush=True)
+          print("=" * 60, flush=True)
           
-          download_novel(book_id, save_path, file_format, start, end)
+          try:
+              download_novel(book_id, save_path, file_format, start, end)
+              print("=" * 60, flush=True)
+              print("✓ 下载完成！", flush=True)
+              print("=" * 60, flush=True)
+          except Exception as e:
+              print("=" * 60, flush=True)
+              print(f"✗ 下载失败: {e}", flush=True)
+              print("=" * 60, flush=True)
+              import traceback
+              traceback.print_exc()
+              sys.exit(1)
           EOF
           
+          echo "✓ 下载脚本准备完成"
+          
       - name: 下载小说
+        env:
+          PYTHONUNBUFFERED: "1"
+          DISPLAY: ":99"
         run: |
-          echo "开始下载..."
-          python run_download.py
+          echo "=========================================="
+          echo "启动虚拟显示服务器..."
+          echo "=========================================="
+          # 启动虚拟显示服务器（Selenium 需要）
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          sleep 2
+          
+          echo "=========================================="
+          echo "执行下载脚本..."
+          echo "=========================================="
+          python -u run_download.py 2>&1 | tee download.log
+          
+          echo "=========================================="
+          echo "检查输出目录..."
+          echo "=========================================="
+          ls -lah output/ || echo "输出目录为空或不存在"
+          
+      - name: 显示下载日志（如果失败）
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "下载日志内容:"
+          echo "=========================================="
+          cat download.log || echo "日志文件不存在"
           
       - name: 上传下载结果
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: novel-${{ github.event.inputs.book_id }}-${{ github.event.inputs.format }}
           path: output/*
           retention-days: 7
           compression-level: 6
+          if-no-files-found: warn
+      
+      - name: 上传下载日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-log-${{ github.run_id }}
+          path: download.log
+          retention-days: 3
+          if-no-files-found: warn
       
       - name: 上传下载状态
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: download-status-${{ github.run_id }}
           path: output/download_status.json
           retention-days: 7
           compression-level: 6
+          if-no-files-found: warn
