@@ -403,10 +403,10 @@ def save_as_txt(output_path: str, book_name: str, author: str, description: str,
 
                 for line in lines:
                     line = line.strip()
-                    # if line:
-                    #     formatted_lines.append(line)
-                    # else:
-                    formatted_lines.append('')
+                    if line:
+                        formatted_lines.append(line)
+                    else:
+                        formatted_lines.append('')
 
                 f.write('\n'.join(formatted_lines))
                 f.write('\n\n')
