@@ -1,0 +1,121 @@
+name: Download Novel
+
+on:
+  workflow_dispatch:
+    inputs:
+      book_id:
+        description: '书籍ID'
+        required: true
+        type: string
+      format:
+        description: '输出格式'
+        required: true
+        type: choice
+        options:
+          - txt
+          - epub
+        default: txt
+      start_chapter:
+        description: '起始章节（留空表示从第1章）'
+        required: false
+        type: string
+      end_chapter:
+        description: '结束章节（留空表示到最后）'
+        required: false
+        type: string
+      thread_count:
+        description: '下载线程数'
+        required: false
+        type: string
+        default: '1'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 安装 Chrome 和 ChromeDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          # 安装 Chrome
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get -f install -y
+          # 验证安装
+          google-chrome --version
+      
+      - name: 下载小说
+        run: |
+          # 创建非交互式下载脚本
+          cat > run_download.py << 'EOF'
+          import sys
+          import os
+          
+          # 导入下载器
+          sys.path.insert(0, os.path.dirname(__file__))
+          from shuba_downloader import download_novel, CONFIG
+          
+          # 从环境变量获取参数
+          book_id = os.environ.get('BOOK_ID')
+          file_format = os.environ.get('FORMAT', 'txt')
+          start_chapter = os.environ.get('START_CHAPTER')
+          end_chapter = os.environ.get('END_CHAPTER')
+          thread_count = int(os.environ.get('THREAD_COUNT', '1'))
+          
+          # 设置线程数
+          CONFIG['max_workers'] = thread_count
+          
+          # 处理章节范围
+          start = int(start_chapter) - 1 if start_chapter else None
+          end = int(end_chapter) - 1 if end_chapter else None
+          
+          # 执行下载
+          save_path = './output'
+          os.makedirs(save_path, exist_ok=True)
+          
+          print(f"开始下载书籍 ID: {book_id}")
+          print(f"格式: {file_format}")
+          print(f"线程数: {thread_count}")
+          if start is not None and end is not None:
+              print(f"章节范围: {start+1} - {end+1}")
+          
+          download_novel(book_id, save_path, file_format, start, end)
+          EOF
+          
+          # 运行下载
+          export BOOK_ID="${{ github.event.inputs.book_id }}"
+          export FORMAT="${{ github.event.inputs.format }}"
+          export START_CHAPTER="${{ github.event.inputs.start_chapter }}"
+          export END_CHAPTER="${{ github.event.inputs.end_chapter }}"
+          export THREAD_COUNT="${{ github.event.inputs.thread_count }}"
+          
+          python run_download.py
+      
+      - name: 上传下载结果
+        uses: actions/upload-artifact@v3
+        with:
+          name: novel-${{ github.event.inputs.book_id }}-${{ github.event.inputs.format }}
+          path: output/*
+          retention-days: 7
+      
+      - name: 上传下载状态
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: download-status
+          path: output/download_status.json
+          retention-days: 7
