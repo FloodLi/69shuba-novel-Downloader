@@ -1,7 +1,5 @@
-requests>=2.25.0
-bs4>=0.0.1
-beautifulsoup4>=4.9.0
-lxml>=4.9.0
-ebooklib>=0.17.1
-tqdm>=4.62.0
-pyinstaller>=5.0.0 
+selenium==4.15.2
+beautifulsoup4==4.12.2
+tqdm==4.66.1
+ebooklib==0.18
+webdriver-manager==4.0.1
