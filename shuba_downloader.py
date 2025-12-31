@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-小说下载器
+书吧小说下载器
 支持txt和epub格式导出
 使用Selenium模拟浏览器
 """
@@ -64,33 +64,50 @@ stop_flag = threading.Event()  # 全局停止标志
 def safe_print(msg: str):
     """线程安全的打印"""
     with print_lock:
-        print(msg)
+        print(msg, flush=True)  # 强制刷新缓冲区
 
 
 def create_driver() -> webdriver.Chrome:
     """创建Chrome浏览器实例"""
+    safe_print("正在创建Chrome浏览器实例...")
+
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('--disable-gpu')
+    options.add_argument('--disable-software-rasterizer')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-logging')
+    options.add_argument('--log-level=3')
+    options.add_argument('--silent')
     options.add_argument(
         'user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36')
 
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     options.add_experimental_option('useAutomationExtension', False)
 
+    # GitHub Actions 环境特殊配置
+    if os.environ.get('CI'):
+        safe_print("检测到 CI 环境，应用特殊配置...")
+        options.add_argument('--disable-setuid-sandbox')
+        options.add_argument('--single-process')
+
     try:
+        safe_print("正在启动 ChromeDriver...")
         driver = webdriver.Chrome(options=options)
         driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
             'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
         })
         driver.set_page_load_timeout(CONFIG["page_timeout"])
+        safe_print("✓ Chrome浏览器实例创建成功")
         return driver
     except Exception as e:
-        safe_print(f"创建浏览器失败: {e}")
+        safe_print(f"✗ 创建浏览器失败: {e}")
         safe_print("提示: 请确保已安装Chrome浏览器和ChromeDriver")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
@@ -126,6 +143,7 @@ def fetch_page_with_selenium(url: str, wait_element: Optional[str] = None) -> st
     """使用Selenium获取页面内容"""
     driver = get_driver()
     try:
+        safe_print(f"正在访问: {url}")
         driver.get(url)
 
         if wait_element:
@@ -133,14 +151,16 @@ def fetch_page_with_selenium(url: str, wait_element: Optional[str] = None) -> st
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, wait_element))
                 )
+                safe_print(f"✓ 页面元素加载完成")
             except TimeoutException:
-                pass
+                safe_print(f"⚠ 等待元素超时，继续处理...")
 
         time.sleep(1)
         html = driver.page_source
+        safe_print(f"✓ 页面内容获取成功 (长度: {len(html)})")
         return html
     except Exception as e:
-        safe_print(f"访问 {url} 失败: {e}")
+        safe_print(f"✗ 访问 {url} 失败: {e}")
         return ""
     finally:
         return_driver(driver)
@@ -151,7 +171,7 @@ def get_book_info(book_id: str) -> Tuple[Optional[str], Optional[str], Optional[
     url = f"{CONFIG['base_url']}/book/{book_id}.htm"
     safe_print(f"正在获取书籍信息: {url}")
 
-    html = fetch_page_with_selenium(url, ".bookname")
+    html = fetch_page_with_selenium(url, ".booknav2")
     if not html:
         return None, None, None
 
@@ -372,10 +392,10 @@ def save_as_txt(output_path: str, book_name: str, author: str, description: str,
                 for line in lines:
                     line = line.strip()
                     if line:
-                        # if not line.startswith('　　'):
-                        #     formatted_lines.append(f'　　{line}')
-                        # else:
-                        formatted_lines.append(line)
+                        if not line.startswith('　　'):
+                            formatted_lines.append(f'　　{line}')
+                        else:
+                            formatted_lines.append(line)
                     else:
                         formatted_lines.append('')
 
@@ -498,41 +518,72 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
     stop_flag.clear()  # 重置停止标志
 
     try:
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 1/8: 获取书籍信息")
+        safe_print("=" * 60)
         name, author, description = get_book_info(book_id)
         if not name:
-            safe_print("获取书籍信息失败，请检查书籍ID是否正确")
+            safe_print("✗ 获取书籍信息失败，请检查书籍ID是否正确")
             return
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 2/8: 获取章节列表")
+        safe_print("=" * 60)
         chapters = get_chapter_list(book_id)
         if not chapters:
-            safe_print("获取章节列表失败")
+            safe_print("✗ 获取章节列表失败")
             return
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 3/8: 处理章节范围")
+        safe_print("=" * 60)
         if start_chapter is not None and end_chapter is not None:
             chapters = chapters[start_chapter:end_chapter + 1]
-            safe_print(f"已选择章节范围: 第{start_chapter + 1}章 - 第{end_chapter + 1}章 (共{len(chapters)}章)")
+            safe_print(f"✓ 已选择章节范围: 第{start_chapter + 1}章 - 第{end_chapter + 1}章 (共{len(chapters)}章)")
+        else:
+            safe_print(f"✓ 将下载全部章节 (共{len(chapters)}章)")
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 4/8: 加载下载状态")
+        safe_print("=" * 60)
         os.makedirs(save_path, exist_ok=True)
         downloaded = load_status(save_path)
+        safe_print(f"✓ 已下载章节数: {len(downloaded)}")
 
         if downloaded and start_chapter is None:
-            safe_print(f"检测到之前下载过《{name}》")
-            choice = input("是否继续下载? (y/n): ").strip().lower()
-            if choice != 'y':
-                safe_print("已取消下载")
-                return
+            safe_print(f"⚠ 检测到之前下载过《{name}》")
+            # 在 CI 环境自动继续
+            if not os.environ.get('CI'):
+                choice = input("是否继续下载? (y/n): ").strip().lower()
+                if choice != 'y':
+                    safe_print("已取消下载")
+                    return
+            else:
+                safe_print("CI 环境自动继续下载")
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 5/8: 筛选待下载章节")
+        safe_print("=" * 60)
         todo_chapters = [ch for ch in chapters if ch['id'] not in downloaded]
         if not todo_chapters:
-            safe_print("所有章节已下载完成")
+            safe_print("✓ 所有章节已下载完成")
             return
 
-        safe_print(f"开始下载《{name}》")
-        safe_print(f"总章节数: {len(chapters)}, 待下载: {len(todo_chapters)}")
+        safe_print(f"✓ 待下载章节数: {len(todo_chapters)}")
+        safe_print(f"✓ 书名: 《{name}》")
+        safe_print(f"✓ 作者: {author}")
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 6/8: 准备输出文件")
+        safe_print("=" * 60)
         output_filename = f"{name}.{file_format}"
         output_path = os.path.join(save_path, output_filename)
+        safe_print(f"✓ 输出文件: {output_path}")
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 7/8: 开始下载章节")
+        safe_print(f"使用 {CONFIG['max_workers']} 个线程")
+        safe_print("=" * 60)
         chapter_results = {}
         lock = threading.Lock()
 
@@ -568,6 +619,9 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
         finally:
             executor.shutdown(wait=True)  # 确保线程池关闭
 
+        safe_print("\n" + "=" * 60)
+        safe_print("步骤 8/8: 保存文件")
+        safe_print("=" * 60)
         if chapter_results:
             if file_format == 'txt':
                 save_as_txt(output_path, name, author, description, chapter_results, chapters)
@@ -575,16 +629,24 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
                 save_as_epub(output_path, name, author, description, chapter_results, chapters)
 
             save_status(save_path, downloaded)
-            safe_print(f"\n下载完成! 成功下载 {len(chapter_results)} 章")
+            safe_print("\n" + "=" * 60)
+            safe_print(f"✓ 下载完成！成功下载 {len(chapter_results)} 章")
+            safe_print("=" * 60)
         else:
-            safe_print("没有成功下载任何章节")
+            safe_print("\n" + "=" * 60)
+            safe_print("✗ 没有成功下载任何章节")
+            safe_print("=" * 60)
 
     except Exception as e:
-        safe_print(f"下载过程中出错: {e}")
+        safe_print("\n" + "=" * 60)
+        safe_print(f"✗ 下载过程中出错: {e}")
+        safe_print("=" * 60)
         import traceback
         traceback.print_exc()
     finally:
+        safe_print("\n正在清理资源...")
         close_all_drivers()
+        safe_print("✓ 资源清理完成")
 
 
 def get_chapter_range(total_chapters: int) -> Tuple[Optional[int], Optional[int]]:
@@ -618,9 +680,18 @@ def get_chapter_range(total_chapters: int) -> Tuple[Optional[int], Optional[int]
 
 def main():
     """主函数"""
+    # 检测运行环境
+    is_ci = os.environ.get('CI')
+    if is_ci:
+        print("=" * 60, flush=True)
+        print("检测到 GitHub Actions 环境", flush=True)
+        print(f"Python 版本: {sys.version}", flush=True)
+        print(f"工作目录: {os.getcwd()}", flush=True)
+        print("=" * 60, flush=True)
+
     print("""
 ╔═══════════════════════════════════════════════╗
-║             小说下载器 v1.3                     ║
+║          书吧小说下载器 v1.3                    ║
 ╚═══════════════════════════════════════════════╝
 
 使用说明:
@@ -635,7 +706,7 @@ def main():
 - ChromeDriver (需要与Chrome版本匹配)
 
 按 Ctrl+C 可随时中断下载，程序会立即停止并保存已下载内容
-""")
+""", flush=True)
 
     workers_input = input(f"请输入下载线程数 (默认1，推荐1-3): ").strip()
     if workers_input.isdigit() and int(workers_input) > 0:
