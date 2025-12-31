@@ -69,12 +69,12 @@ jobs:
           sys.path.insert(0, os.path.dirname(__file__))
           from shuba_downloader import download_novel, CONFIG
           
-          # 从环境变量获取参数
-          # book_id = os.environ.get('BOOK_ID')
-          # file_format = os.environ.get('FORMAT', 'txt')
-          # start_chapter = os.environ.get('START_CHAPTER')
-          # end_chapter = os.environ.get('END_CHAPTER')
-          # thread_count = int(os.environ.get('THREAD_COUNT', '1'))
+          # 获取参数
+          book_id = "${{ github.event.inputs.book_id }}"
+          file_format = "${{ github.event.inputs.format }}"
+          start_chapter = "${{ github.event.inputs.start_chapter }}"
+          end_chapter = "${{ github.event.inputs.end_chapter }}"
+          thread_count = int("${{ github.event.inputs.thread_count }}")
           
           # 设置线程数
           CONFIG['max_workers'] = thread_count
