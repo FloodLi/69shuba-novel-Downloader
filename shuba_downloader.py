@@ -49,22 +49,24 @@ CONFIG = {
     "max_workers": 1,
     "page_timeout": 20,
     "status_file": "download_status.json",
+    "failed_file": "failed_chapters.json",
     "base_url": "https://www.69shuba.com",
     "retry_times": 3,
     "retry_delay": 2,
+    "max_retry_rounds": 3,  # 失败章节最大重试轮数
 }
 
 # 全局变量
 print_lock = threading.Lock()
 driver_pool = []
 driver_lock = threading.Lock()
-stop_flag = threading.Event()  # 全局停止标志
+stop_flag = threading.Event()
 
 
 def safe_print(msg: str):
     """线程安全的打印"""
     with print_lock:
-        print(msg, flush=True)  # 强制刷新缓冲区
+        print(msg, flush=True)
 
 
 def create_driver() -> webdriver.Chrome:
@@ -88,7 +90,6 @@ def create_driver() -> webdriver.Chrome:
     options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     options.add_experimental_option('useAutomationExtension', False)
 
-    # GitHub Actions 环境特殊配置
     if os.environ.get('CI'):
         safe_print("检测到 CI 环境，应用特殊配置...")
         options.add_argument('--disable-setuid-sandbox')
@@ -255,7 +256,7 @@ def get_chapter_list(book_id: str) -> List[Dict]:
 def get_chapter_content(chapter: Dict) -> Optional[str]:
     """获取单章内容"""
     for attempt in range(CONFIG["retry_times"]):
-        if stop_flag.is_set():  # 检查停止标志
+        if stop_flag.is_set():
             return None
 
         try:
@@ -370,6 +371,17 @@ def save_status(save_path: str, downloaded: set):
         safe_print(f"保存状态失败: {e}")
 
 
+def save_failed_chapters(save_path: str, failed_chapters: List[Dict]):
+    """保存失败章节信息"""
+    failed_file = os.path.join(save_path, CONFIG["failed_file"])
+    try:
+        with open(failed_file, 'w', encoding='utf-8') as f:
+            json.dump(failed_chapters, f, ensure_ascii=False, indent=2)
+        safe_print(f"✓ 失败章节信息已保存到: {failed_file}")
+    except Exception as e:
+        safe_print(f"保存失败章节信息出错: {e}")
+
+
 def save_as_txt(output_path: str, book_name: str, author: str, description: str,
                 chapter_results: Dict, chapters: List[Dict]):
     """保存为TXT格式"""
@@ -392,9 +404,6 @@ def save_as_txt(output_path: str, book_name: str, author: str, description: str,
                 for line in lines:
                     line = line.strip()
                     if line:
-                        # if not line.startswith('　　'):
-                        #     formatted_lines.append(f'　　{line}')
-                        # else:
                         formatted_lines.append(line)
                     else:
                         formatted_lines.append('')
@@ -464,6 +473,45 @@ def save_as_epub(output_path: str, book_name: str, author: str, description: str
         safe_print(f"保存EPUB文件失败: {e}")
 
 
+def download_chapters_batch(todo_chapters: List[Dict], chapter_results: Dict, 
+                            downloaded: set, save_path: str, lock: threading.Lock) -> List[Dict]:
+    """批量下载章节，返回失败的章节列表"""
+    failed_chapters = []
+    
+    with ThreadPoolExecutor(max_workers=CONFIG["max_workers"]) as executor:
+        futures = {executor.submit(get_chapter_content, ch): ch for ch in todo_chapters}
+
+        with tqdm(total=len(todo_chapters), desc="下载进度") as pbar:
+            for future in as_completed(futures):
+                if stop_flag.is_set():
+                    break
+
+                chapter = futures[future]
+                try:
+                    content = future.result(timeout=30)
+                    if content:
+                        processed_content = process_chapter_content(content)
+                        with lock:
+                            chapter_results[chapter['index']] = {
+                                'title': chapter['title'],
+                                'content': processed_content
+                            }
+                            downloaded.add(chapter['id'])
+
+                        if len(chapter_results) % 10 == 0:
+                            save_status(save_path, downloaded)
+                    else:
+                        safe_print(f"✗ 章节 {chapter['title']} 下载失败")
+                        failed_chapters.append(chapter)
+                except Exception as e:
+                    safe_print(f"✗ 处理章节 {chapter['title']} 时出错: {e}")
+                    failed_chapters.append(chapter)
+                finally:
+                    pbar.update(1)
+    
+    return failed_chapters
+
+
 def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
                    start_chapter: Optional[int] = None, end_chapter: Optional[int] = None):
     """下载小说主函数"""
@@ -479,15 +527,13 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
 
     def signal_handler(sig, frame):
         safe_print("\n\n检测到程序中断，正在清理资源...")
-        stop_flag.set()  # 设置停止标志
+        stop_flag.set()
 
-        # 关闭线程池
         if executor:
             safe_print("正在停止下载任务...")
             executor.shutdown(wait=False, cancel_futures=True)
-            time.sleep(1)  # 给线程一点时间响应
+            time.sleep(1)
 
-        # 保存已下载内容
         if chapter_results and output_path and name:
             safe_print("正在保存已下载内容...")
             try:
@@ -498,24 +544,22 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
             except Exception as e:
                 safe_print(f"保存文件时出错: {e}")
 
-        # 保存下载状态
         if downloaded:
             try:
                 save_status(save_path, downloaded)
             except Exception as e:
                 safe_print(f"保存状态时出错: {e}")
 
-        # 关闭所有驱动
         safe_print("正在关闭浏览器...")
         close_all_drivers()
 
         safe_print("已保存进度，程序退出")
-        os._exit(0)  # 强制退出所有线程
+        os._exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    stop_flag.clear()  # 重置停止标志
+    stop_flag.clear()
 
     try:
         safe_print("\n" + "=" * 60)
@@ -552,7 +596,6 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
 
         if downloaded and start_chapter is None:
             safe_print(f"⚠ 检测到之前下载过《{name}》")
-            # 在 CI 环境自动继续
             if not os.environ.get('CI'):
                 choice = input("是否继续下载? (y/n): ").strip().lower()
                 if choice != 'y':
@@ -584,44 +627,41 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
         safe_print("步骤 7/8: 开始下载章节")
         safe_print(f"使用 {CONFIG['max_workers']} 个线程")
         safe_print("=" * 60)
+        
         chapter_results = {}
         lock = threading.Lock()
-
-        executor = ThreadPoolExecutor(max_workers=CONFIG["max_workers"])
-        try:
-            futures = {executor.submit(get_chapter_content, ch): ch for ch in todo_chapters}
-
-            with tqdm(total=len(todo_chapters), desc="下载进度") as pbar:
-                for future in as_completed(futures):
-                    if stop_flag.is_set():  # 检查停止标志
-                        break
-
-                    chapter = futures[future]
-                    try:
-                        content = future.result(timeout=30)  # 添加超时
-                        if content:
-                            processed_content = process_chapter_content(content)
-                            with lock:
-                                chapter_results[chapter['index']] = {
-                                    'title': chapter['title'],
-                                    'content': processed_content
-                                }
-                                downloaded.add(chapter['id'])
-
-                            if len(chapter_results) % 10 == 0:
-                                save_status(save_path, downloaded)
-                        else:
-                            safe_print(f"章节 {chapter['title']} 下载失败")
-                    except Exception as e:
-                        safe_print(f"处理章节 {chapter['title']} 时出错: {e}")
-                    finally:
-                        pbar.update(1)
-        finally:
-            executor.shutdown(wait=True)  # 确保线程池关闭
+        
+        # 第一轮下载
+        safe_print("\n>>> 第 1 轮下载")
+        failed_chapters = download_chapters_batch(todo_chapters, chapter_results, 
+                                                  downloaded, save_path, lock)
+        
+        # 失败章节重试机制
+        retry_round = 1
+        while failed_chapters and retry_round <= CONFIG["max_retry_rounds"] and not stop_flag.is_set():
+            safe_print("\n" + "-" * 60)
+            safe_print(f"⚠ 发现 {len(failed_chapters)} 个章节下载失败")
+            safe_print(f">>> 开始第 {retry_round + 1} 轮重试")
+            safe_print("-" * 60)
+            
+            # 显示失败章节
+            for ch in failed_chapters[:5]:  # 只显示前5个
+                safe_print(f"  - {ch['title']} (ID: {ch['id']})")
+            if len(failed_chapters) > 5:
+                safe_print(f"  ... 还有 {len(failed_chapters) - 5} 个章节")
+            
+            # 等待一段时间再重试
+            time.sleep(3)
+            
+            # 重试失败的章节
+            failed_chapters = download_chapters_batch(failed_chapters, chapter_results,
+                                                     downloaded, save_path, lock)
+            retry_round += 1
 
         safe_print("\n" + "=" * 60)
         safe_print("步骤 8/8: 保存文件")
         safe_print("=" * 60)
+        
         if chapter_results:
             if file_format == 'txt':
                 save_as_txt(output_path, name, author, description, chapter_results, chapters)
@@ -629,9 +669,47 @@ def download_novel(book_id: str, save_path: str, file_format: str = 'txt',
                 save_as_epub(output_path, name, author, description, chapter_results, chapters)
 
             save_status(save_path, downloaded)
+            
+            # 统计结果
+            total_chapters = len(todo_chapters)
+            success_count = len(chapter_results)
+            failed_count = len(failed_chapters)
+            
             safe_print("\n" + "=" * 60)
-            safe_print(f"✓ 下载完成！成功下载 {len(chapter_results)} 章")
+            safe_print("下载统计")
             safe_print("=" * 60)
+            safe_print(f"✓ 总章节数: {total_chapters}")
+            safe_print(f"✓ 成功下载: {success_count} 章")
+            safe_print(f"✗ 下载失败: {failed_count} 章")
+            safe_print(f"✓ 成功率: {success_count * 100 / total_chapters:.2f}%")
+            
+            # 如果有失败的章节，保存失败信息并输出日志
+            if failed_chapters:
+                safe_print("\n" + "=" * 60)
+                safe_print("⚠ 失败章节详情")
+                safe_print("=" * 60)
+                
+                failed_info = []
+                for ch in failed_chapters:
+                    info = {
+                        "index": ch['index'] + 1,
+                        "id": ch['id'],
+                        "title": ch['title'],
+                        "url": ch['url']
+                    }
+                    failed_info.append(info)
+                    safe_print(f"  第 {info['index']} 章: {info['title']}")
+                    safe_print(f"    ID: {info['id']}")
+                    safe_print(f"    URL: {info['url']}")
+                
+                # 保存失败章节信息到文件
+                save_failed_chapters(save_path, failed_info)
+                
+                safe_print("\n⚠ 提示: 可以稍后重新运行程序，已下载的章节会自动跳过")
+            else:
+                safe_print("\n" + "=" * 60)
+                safe_print("🎉 所有章节下载成功！")
+                safe_print("=" * 60)
         else:
             safe_print("\n" + "=" * 60)
             safe_print("✗ 没有成功下载任何章节")
@@ -680,7 +758,6 @@ def get_chapter_range(total_chapters: int) -> Tuple[Optional[int], Optional[int]
 
 def main():
     """主函数"""
-    # 检测运行环境
     is_ci = os.environ.get('CI')
     if is_ci:
         print("=" * 60, flush=True)
@@ -691,7 +768,7 @@ def main():
 
     print("""
 ╔═══════════════════════════════════════════════╗
-║          书吧小说下载器 v1.3                    ║
+║          书吧小说下载器 v1.4                    ║
 ╚═══════════════════════════════════════════════╝
 
 使用说明:
@@ -700,6 +777,13 @@ def main():
 3. 默认线程数为1，避免触发反爬虫机制
 4. 支持指定章节范围下载
 5. 支持txt和epub两种格式
+6. 失败章节自动重试3次
+
+新特性:
+- 自动记录下载失败的章节
+- 失败章节自动重试最多3轮
+- 保存失败章节详细信息到 failed_chapters.json
+- 显示下载统计和成功率
 
 环境要求:
 - Chrome浏览器
@@ -778,7 +862,6 @@ def main():
             import traceback
             traceback.print_exc()
 
-    # 主循环结束后清理资源
     close_all_drivers()
 
 
