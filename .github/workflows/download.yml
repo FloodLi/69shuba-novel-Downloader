@@ -182,12 +182,12 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
       
-      - name: 上传下载状态
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: download-status-${{ github.run_id }}
-          path: output/download_status.json
-          retention-days: 7
-          compression-level: 6
-          if-no-files-found: warn
+      # - name: 上传下载状态
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: download-status-${{ github.run_id }}
+      #     path: output/download_status.json
+      #     retention-days: 7
+      #     compression-level: 6
+      #     if-no-files-found: warn
