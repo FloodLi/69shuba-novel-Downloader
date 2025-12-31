@@ -392,10 +392,10 @@ def save_as_txt(output_path: str, book_name: str, author: str, description: str,
                 for line in lines:
                     line = line.strip()
                     if line:
-                        if not line.startswith('　　'):
-                            formatted_lines.append(f'　　{line}')
-                        else:
-                            formatted_lines.append(line)
+                        # if not line.startswith('　　'):
+                        #     formatted_lines.append(f'　　{line}')
+                        # else:
+                        formatted_lines.append(line)
                     else:
                         formatted_lines.append('')
 
