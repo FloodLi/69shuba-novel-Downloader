@@ -58,7 +58,7 @@ jobs:
           # 验证安装
           google-chrome --version
       
-      - name: 下载小说
+      - name: 准备下载脚本
         run: |
           # 创建非交互式下载脚本
           cat > run_download.py << 'EOF'
@@ -96,15 +96,11 @@ jobs:
           download_novel(book_id, save_path, file_format, start, end)
           EOF
           
-          # 运行下载
-          export BOOK_ID="${{ github.event.inputs.book_id }}"
-          export FORMAT="${{ github.event.inputs.format }}"
-          export START_CHAPTER="${{ github.event.inputs.start_chapter }}"
-          export END_CHAPTER="${{ github.event.inputs.end_chapter }}"
-          export THREAD_COUNT="${{ github.event.inputs.thread_count }}"
+      - name: 下载小说
+        run: |
+          echo "开始下载..."
+          python run_download.py
           
-          python run_download.py "${{ github.event.inputs.book_id }}" "${{ save_path }}" "${{ github.event.inputs.format }}" "${{ github.event.inputs.start_chapter }}" "${{ github.event.inputs.end_chapter }}" "${{ github.event.inputs.thread_count }}"
-      
       - name: 上传下载结果
         uses: actions/upload-artifact@v4
         with:
